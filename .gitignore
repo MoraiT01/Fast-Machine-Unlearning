@@ -1,3 +1,4 @@
 data/
 cifar10.tgz
 ResNET18_CIFAR10_ALL_CLASSES.pt
+__pycache__
