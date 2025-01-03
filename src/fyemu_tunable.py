@@ -6,10 +6,13 @@ import os
 import math
 import torch
 from torch import nn
+from tqdm import tqdm
+from PIL import Image
+
 import torch.nn.functional as F
 from torchvision.datasets.utils import download_url
 from torchvision.datasets import ImageFolder
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as tt
 from torchvision.models import resnet18
 
@@ -82,7 +85,7 @@ def fit_one_cycle(epochs, max_lr, model, train_loader, val_loader,
         model.train()
         train_losses = []
         lrs = []
-        for batch in train_loader:
+        for batch in tqdm(train_loader, desc="Training...", unit="batch", leave=True):
             loss = training_step(model, batch)
             train_losses.append(loss)
             loss.backward()
@@ -164,6 +167,18 @@ class NoiseGenerator(nn.Module):
         reshaped_tensor = x.view(self.dim)
         return reshaped_tensor
 
+class SubData(Dataset):
+    def __init__(self, data, transform):
+        self.data = data
+        self.transform = transform
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self, idx):
+        path, label = self.data[idx]
+        img = Image.open(path).convert('RGB')
+        img = self.transform(img)
+        return img, label
+
 def main(
     t_Epochs: int,
     t_Steps: int,
@@ -175,21 +190,25 @@ def main(
     t_Noise_Dim: int,
     new_baseline: bool = False,
     logs: bool = False,
-):
+    ):
 
-    # Dowload the dataset
-    dataset_url = "https://s3.amazonaws.com/fast-ai-imageclas/cifar10.tgz"
-    download_url(dataset_url, '.')
+    # Checking if the dataset needs to be downloaded
+    if not os.path.exists(f'data{os.sep}cifar10'):
+        if logs:
+            print("Dataset not found. Downloading...")
+        # Dowload the dataset
+        dataset_url = f"https:{os.sep}s3.amazonaws.com{os.sep}fast-ai-imageclas{os.sep}cifar10.tgz"
+        download_url(dataset_url, '.')
 
-    # Extract from archive
-    with tarfile.open('./cifar10.tgz', 'r:gz') as tar:
-        tar.extractall(path='./data')
+        # Extract from archive
+        with tarfile.open(f'cifar10.tgz', 'r:gz') as tar:
+            tar.extractall(path=f'data')
 
     # Look into the data directory
-    data_dir = './data/cifar10'
+    data_dir = f'data{os.sep}cifar10'
     if logs:
         print(os.listdir(data_dir))
-    classes = os.listdir(data_dir + "/train")
+    classes = os.listdir(data_dir + f"{os.sep}train")
     if logs:
         print(classes)
 
@@ -203,41 +222,86 @@ def main(
         tt.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
 
-    train_ds = ImageFolder(data_dir+'/train', transform_train)
-    valid_ds = ImageFolder(data_dir+'/test', transform_test)
+    train_ds = ImageFolder(data_dir+f'{os.sep}train', transform_train)
+    valid_ds = ImageFolder(data_dir+f'{os.sep}test', transform_test)
 
     batch_size = t_Batch_Size # Changed
     train_dl = DataLoader(train_ds, batch_size, shuffle=True, num_workers=3, pin_memory=True)
     valid_dl = DataLoader(valid_ds, batch_size*2, num_workers=3, pin_memory=True)
 
     DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
-    model = resnet18(num_classes = 10).to(DEVICE = DEVICE)
+    # list of all classes
+    classes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    # classes which are required to un-learn
+    classes_to_forget = [0, 2]
 
     if new_baseline or not os.path.exists("ResNET18_CIFAR10_ALL_CLASSES.pt"):
+        print("---Training new ResNet18---")
+        model = resnet18(num_classes = 10).to(DEVICE)
         epochs = 40
         max_lr = 0.01
         grad_clip = 0.1
         weight_decay = 1e-4
         opt_func = torch.optim.Adam
 
-        history = fit_one_cycle(epochs, max_lr, model, train_dl, valid_dl, 
+        t_tr = {}
+        for t, l in train_ds.imgs:
+            t_tr[len(t_tr)] = (t, l)
+        t_vl = {}
+        for t, l in valid_ds.imgs:
+            t_vl[len(t_vl)] = (t, l)
+
+        t_tr = SubData(t_tr, transform_train)
+        t_vl = SubData(t_vl, transform_test)
+
+        t_tr_dl = DataLoader(t_tr, batch_size, shuffle=True)
+        t_vl_dl = DataLoader(t_vl, batch_size*2)
+
+        history = fit_one_cycle(epochs, max_lr, model, t_tr_dl, t_vl_dl, 
                                     grad_clip=grad_clip, 
                                     weight_decay=weight_decay, 
                                     opt_func=opt_func)
 
         torch.save(model.state_dict(), "ResNET18_CIFAR10_ALL_CLASSES.pt")
+    # same for the exact unlearned model
+    if new_baseline or not os.path.exists("ResNET18_CIFAR10_RETAIN_CLASSES.pt"):
+        print("---Training new Exact Unlearned ResNet18---")
+        model = resnet18(num_classes = 10).to(DEVICE)
+        epochs = 40
+        max_lr = 0.01
+        grad_clip = 0.1
+        weight_decay = 1e-4
+        opt_func = torch.optim.Adam
 
-    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt"))
+        # Define train and validation dataloaders for retain data classes
+        rt_tr = {}
+        for t, l in train_ds.imgs:
+            if l not in classes_to_forget:
+                rt_tr[len(rt_tr)] = (t, l)
+        rt_vl = {}
+        for t, l in valid_ds.imgs:
+            if l not in classes_to_forget:
+                rt_vl[len(rt_vl)] = (t, l)
+
+        rt_tr = SubData(rt_tr, transform_train)
+        rt_vl = SubData(rt_vl, transform_test)
+
+        rt_tr_dl = DataLoader(rt_tr, batch_size, shuffle=True)
+        rt_vl_dl = DataLoader(rt_vl, batch_size*2)
+
+        history = fit_one_cycle(epochs, max_lr, model, rt_tr_dl, rt_vl_dl, 
+                                    grad_clip=grad_clip, 
+                                    weight_decay=weight_decay, 
+                                    opt_func=opt_func)
+
+        torch.save(model.state_dict(), "ResNET18_CIFAR10_RETAIN_CLASSES.pt")
+
+    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
     history = [evaluate(model, valid_dl)]
     
     if logs:
         print(history)
-
-    # list of all classes
-    classes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-    # classes which are required to un-learn
-    classes_to_forget = [0, 2]
 
     # classwise list of samples
     num_classes = 10
@@ -263,7 +327,7 @@ def main(
         if classes[i] not in classes_to_forget:
             retain_samples += classwise_train[i][:num_samples_per_class]
 
-            # retain validation set
+    # retain validation set
     retain_valid = []
     for cls in range(num_classes):
         if cls not in classes_to_forget:
@@ -282,9 +346,11 @@ def main(
 
 
     # loading the model
-    model = resnet18(num_classes = 10).to(DEVICE = DEVICE)
-    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt"))
+    model = resnet18(num_classes = 10).to(DEVICE)
+    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
 
+
+    print("---Optimizing noise generator---")
     noises = {}
     for cls in classes_to_forget:
         if logs:
@@ -331,16 +397,15 @@ def main(
     noisy_data += other_samples
     noisy_loader = torch.utils.data.DataLoader(noisy_data, batch_size=t_Batch_Size, shuffle = True)
 
-
     optimizer = torch.optim.Adam(model.parameters(), lr = 0.02)
-
+    print("---Impairing Phase---")
     for epoch in range(1):  
         model.train(True)
         running_loss = 0.0
         running_acc = 0
         for i, data in enumerate(noisy_loader):
             inputs, labels = data
-            inputs, labels = inputs,torch.tensor(labels)
+            inputs, labels = inputs,labels.clone().detach()
 
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -377,14 +442,14 @@ def main(
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 0.01)
 
-
+    print("---Repairing Phase---")
     for epoch in range(1):  
         model.train(True)
         running_loss = 0.0
         running_acc = 0
         for i, data in enumerate(heal_loader):
             inputs, labels = data
-            inputs, labels = inputs,torch.tensor(labels)
+            inputs, labels = inputs, labels.clone().detach()
 
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -417,3 +482,4 @@ def main(
     if logs:
         print("Loss: {}".format(history[0]["Loss"]))
 
+    return model, history
