@@ -197,12 +197,12 @@ def main(
         if logs:
             print("Dataset not found. Downloading...")
         # Dowload the dataset
-        dataset_url = f"https:{os.sep}s3.amazonaws.com{os.sep}fast-ai-imageclas{os.sep}cifar10.tgz"
+        dataset_url = f"https://s3.amazonaws.com/fast-ai-imageclas/cifar10.tgz"
         download_url(dataset_url, '.')
 
         # Extract from archive
-        with tarfile.open(f'cifar10.tgz', 'r:gz') as tar:
-            tar.extractall(path=f'data')
+        with tarfile.open('cifar10.tgz', 'r:gz') as tar:
+            tar.extractall(path='data')
 
     # Look into the data directory
     data_dir = f'data{os.sep}cifar10'
@@ -226,7 +226,6 @@ def main(
     valid_ds = ImageFolder(data_dir+f'{os.sep}test', transform_test)
 
     batch_size = t_Batch_Size # Changed
-    train_dl = DataLoader(train_ds, batch_size, shuffle=True, num_workers=3, pin_memory=True)
     valid_dl = DataLoader(valid_ds, batch_size*2, num_workers=3, pin_memory=True)
 
     DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -255,8 +254,8 @@ def main(
         t_tr = SubData(t_tr, transform_train)
         t_vl = SubData(t_vl, transform_test)
 
-        t_tr_dl = DataLoader(t_tr, batch_size, shuffle=True)
-        t_vl_dl = DataLoader(t_vl, batch_size*2)
+        t_tr_dl = DataLoader(t_tr, 256, shuffle=True)
+        t_vl_dl = DataLoader(t_vl, 256*2)
 
         history = fit_one_cycle(epochs, max_lr, model, t_tr_dl, t_vl_dl, 
                                     grad_clip=grad_clip, 
@@ -287,8 +286,8 @@ def main(
         rt_tr = SubData(rt_tr, transform_train)
         rt_vl = SubData(rt_vl, transform_test)
 
-        rt_tr_dl = DataLoader(rt_tr, batch_size, shuffle=True)
-        rt_vl_dl = DataLoader(rt_vl, batch_size*2)
+        rt_tr_dl = DataLoader(rt_tr, 256, shuffle=True)
+        rt_vl_dl = DataLoader(rt_vl, 256*2)
 
         history = fit_one_cycle(epochs, max_lr, model, rt_tr_dl, rt_vl_dl, 
                                     grad_clip=grad_clip, 
