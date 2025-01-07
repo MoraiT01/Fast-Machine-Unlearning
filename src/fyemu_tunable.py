@@ -384,7 +384,7 @@ def main(
         classwise_train[i] = []
 
     for img_path, label in train_ds.imgs:
-        classwise_train[label].append((img_path, label))
+        classwise_train[label].append((img_path, torch.tensor(label)))
     
     # classwise_test = {}
     # for i in range(num_classes):
@@ -508,6 +508,8 @@ def main(
         print("Accuracy: {}".format(history[0]["Acc"]*100))
         print("Loss: {}".format(history[0]["Loss"]))
 
+
+    other_samples = SubData(other_samples, transform_train)
     heal_loader = torch.utils.data.DataLoader(other_samples, batch_size=t_Batch_Size, shuffle = True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 0.01)
