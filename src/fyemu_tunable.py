@@ -175,7 +175,8 @@ class SubData(Dataset):
         return len(self.data)
     def __getitem__(self, idx):
         path, label = self.data[idx]
-        img = Image.open(path).convert('RGB')
+
+        img = Image.open(f"{path}").convert('RGB')
         img = self.transform(img)
         return img, label
 
@@ -197,7 +198,7 @@ def main(
         if logs:
             print("Dataset not found. Downloading...")
         # Dowload the dataset
-        dataset_url = f"https://s3.amazonaws.com/fast-ai-imageclas/cifar10.tgz"
+        dataset_url = "https://s3.amazonaws.com/fast-ai-imageclas/cifar10.tgz"
         download_url(dataset_url, '.')
 
         # Extract from archive
@@ -295,10 +296,10 @@ def main(
                                     opt_func=opt_func)
 
         torch.save(model.state_dict(), "ResNET18_CIFAR10_RETAIN_CLASSES.pt")
-
+    model = resnet18(num_classes = 10).to(DEVICE)
     model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
     history = [evaluate(model, valid_dl)]
-    
+
     if logs:
         print(history)
 
