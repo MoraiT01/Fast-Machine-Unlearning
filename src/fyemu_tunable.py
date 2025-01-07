@@ -3,6 +3,8 @@ import numpy as np
 import tarfile
 import os
 
+import random
+from typing import Tuple, Dict, List, Union
 import math
 import torch
 from torch import nn
@@ -16,6 +18,8 @@ from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as tt
 from torchvision.models import resnet18
 
+# Set the seed for reproducible results
+random.seed(100)
 torch.manual_seed(100)
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -180,6 +184,74 @@ class SubData(Dataset):
         img = self.transform(img)
         return img, label
 
+class FeatureMU_Loader(Dataset):
+    """
+    This class creates a dataset that combines retained data with noise-generated samples.
+    
+    The noise is generated using a list of dictionaries, each containing a noise generator, a label for the noise, and the number of noise samples to generate.
+    The class provides a unified dataset interface with a length method and an item retrieval method that distinguishes between retained data and noise-generated samples.
+    """
+
+    def __init__(self, noisies: List[Dict[str, Union[NoiseGenerator, torch.Tensor, int]]], retain_data: Dataset, transform=None):
+        """
+        Initialize the FeatureMU_Loader.
+
+        Args:
+            noisies (List[Dict[str, Union[NoiseGenerator, torch.Tensor, int]]]): A list of dictionaries containing information about the noise to generate.
+                Each dictionary should contain the following keys:
+                    - "gen": The noise generator.
+                    - "label": The label of the noise.
+                    - "n": The number of noise samples to generate.
+            retain_data (Dataset): The dataset to retain.
+            transform (Optional[Callable]): The transform to apply to the images. If None, no transform is applied.
+        """
+        super().__init__()
+        self.noisies = noisies
+        self.retain_data = retain_data
+        self.transform = transform
+
+    def __len__(self) -> int:
+        """
+        Returns the length of the dataset.
+
+        Returns:
+            int: The length of the dataset.
+        """
+        return len(self.retain_data) + sum([n["n"] for n in self.noisies])
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return an element of the dataset.
+
+        If the index is in the range of the retained dataset, return an element from the retained dataset.
+        If the index is after the retained dataset, generate a noise sample using the noise generator and return it.
+        Args:
+            idx (int): The index of the element to return.
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: The element of the dataset, which is a tuple containing the image and the label.
+        """
+        if idx < len(self.retain_data):
+            # If the index is in the range of the retained dataset, return an element from the retained dataset
+            path, label = self.retain_data[idx]
+
+            img = Image.open(f"{path}").convert('RGB')
+            if self.transform is not None:
+                # If a transform is specified, apply it to the image
+                img = self.transform(img)
+            label = torch.tensor(label)
+            return img, label
+        else:
+            # If the index is after the retained dataset, generate a noise sample using the noise generator and return it
+            c = len(self.retain_data)
+            for i in self.noisies:
+                # For each noise generator, check if the index is in the range of the generated noise
+                c += i["n"]
+                if idx < c:
+                    # If the index is in the range, generate a noise sample and return it
+                    random_max = i["gen"].dim[0]  # That is the batch size
+                    x = random.randint(0, random_max-1)  # Generate a random number between 0 and the batch size
+                    return i["gen"]()[x], i["label"]
+
 def main(
     t_Epochs: int,
     t_Steps: int,
@@ -191,6 +263,7 @@ def main(
     t_Noise_Dim: int,
     new_baseline: bool = False,
     logs: bool = False,
+    model_eval_logs: bool = True,
     ):
 
     # Checking if the dataset needs to be downloaded
@@ -298,59 +371,60 @@ def main(
         torch.save(model.state_dict(), "ResNET18_CIFAR10_RETAIN_CLASSES.pt")
     model = resnet18(num_classes = 10).to(DEVICE)
     model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
-    history = [evaluate(model, valid_dl)]
 
-    if logs:
+    if model_eval_logs:
+        history = [evaluate(model, valid_dl)]
         print(history)
 
     # classwise list of samples
     num_classes = 10
+
     classwise_train = {}
     for i in range(num_classes):
         classwise_train[i] = []
 
-    for img, label in train_ds:
-        classwise_train[label].append((img, label))
-        
-    classwise_test = {}
-    for i in range(num_classes):
-        classwise_test[i] = []
+    for img_path, label in train_ds.imgs:
+        classwise_train[label].append((img_path, label))
+    
+    # classwise_test = {}
+    # for i in range(num_classes):
+    #     classwise_test[i] = []
 
-    for img, label in valid_ds:
-        classwise_test[label].append((img, label))
+    # for img_path, label in valid_ds.imgs:
+    #     classwise_test[label].append((img_path, label))
 
-        # getting some samples from retain classes
-    num_samples_per_class = 1000
+    # getting some samples from retain classes
+    num_samples_per_class = 1000 # This one could also be finetuned
 
-    retain_samples = []
+    retain_samples = {}
     for i in range(len(classes)):
         if classes[i] not in classes_to_forget:
-            retain_samples += classwise_train[i][:num_samples_per_class]
+            retain_samples[len(retain_samples)] = classwise_train[i][:num_samples_per_class]
 
+    # Define train and validation dataloaders for retain data classes
     # retain validation set
-    retain_valid = []
-    for cls in range(num_classes):
-        if cls not in classes_to_forget:
-            for img, label in classwise_test[cls]:
-                retain_valid.append((img, label))
-                
+    forget_valid = {}
+    for t, l in valid_ds.imgs:
+        if l in classes_to_forget:
+            forget_valid[len(forget_valid)] = (t, l)
     # forget validation set
-    forget_valid = []
-    for cls in range(num_classes):
-        if cls in classes_to_forget:
-            for img, label in classwise_test[cls]:
-                forget_valid.append((img, label))
-                
-    forget_valid_dl = DataLoader(forget_valid, batch_size, num_workers=3, pin_memory=True)
-    retain_valid_dl = DataLoader(retain_valid, batch_size*2, num_workers=3, pin_memory=True)
+    retain_valid = {}
+    for t, l in valid_ds.imgs:
+        if l not in classes_to_forget:
+            retain_valid[len(retain_valid)] = (t, l)
 
+    forget_valid_ds = SubData(forget_valid, transform_train)
+    retain_valid_ds = SubData(retain_valid, transform_test)
+    
+    forget_valid_dl = DataLoader(forget_valid_ds, 256, shuffle=True)
+    retain_valid_dl = DataLoader(retain_valid_ds, 256*2)
 
     # loading the model
     model = resnet18(num_classes = 10).to(DEVICE)
     model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
 
-
-    print("---Optimizing noise generator---")
+    if logs:
+        print("---Optimizing noise generator---")
     noises = {}
     for cls in classes_to_forget:
         if logs:
@@ -381,24 +455,25 @@ def main(
                 print("Loss: {}".format(np.mean(total_loss)))
 
     batch_size = t_Batch_Size # Changed
-    noisy_data = []
     num_batches = t_Number_of_Noise_Batches # Changed
-    class_num = 0
 
-    for cls in classes_to_forget:
-        for i in range(num_batches):
-            batch = noises[cls]().cpu().detach()
-            for i in range(batch[0].size(0)):
-                noisy_data.append((batch[i], torch.tensor(class_num)))
-
-    other_samples = []
+    other_samples = {}
     for i in range(len(retain_samples)):
-        other_samples.append((retain_samples[i][0].cpu(), torch.tensor(retain_samples[i][1])))
-    noisy_data += other_samples
+        for j in range(len(retain_samples[i])):
+            other_samples[len(other_samples)] = retain_samples[i][j]
+
+    noisy_data = FeatureMU_Loader(
+        noisies=[
+            {"gen": noises[cls], "label": torch.tensor(cls), "n": num_batches*t_Batch_Size} for cls in classes_to_forget
+        ],
+        retain_data=other_samples,
+        transform=transform_train,
+    )
     noisy_loader = torch.utils.data.DataLoader(noisy_data, batch_size=t_Batch_Size, shuffle = True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 0.02)
-    print("---Impairing Phase---")
+    if logs:
+        print("---Impairing Phase---")
     for epoch in range(1):  
         model.train(True)
         running_loss = 0.0
@@ -422,27 +497,23 @@ def main(
         if logs:
             print(f"Train loss {epoch+1}: {running_loss/len(train_ds)},Train Acc:{running_acc*100/len(train_ds)}%")
 
-    if logs:
+    if model_eval_logs:
         print("Performance of Standard Forget Model on Forget Class")
-    history = [evaluate(model, forget_valid_dl)]
-    if logs:
+        history = [evaluate(model, forget_valid_dl)]
         print("Accuracy: {}".format(history[0]["Acc"]*100))
-    if logs:
         print("Loss: {}".format(history[0]["Loss"]))
 
-    if logs:
         print("Performance of Standard Forget Model on Retain Class")
-    history = [evaluate(model, retain_valid_dl)]
-    if logs:
+        history = [evaluate(model, retain_valid_dl)]
         print("Accuracy: {}".format(history[0]["Acc"]*100))
-    if logs:
         print("Loss: {}".format(history[0]["Loss"]))
 
     heal_loader = torch.utils.data.DataLoader(other_samples, batch_size=t_Batch_Size, shuffle = True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 0.01)
 
-    print("---Repairing Phase---")
+    if logs:
+        print("---Repairing Phase---")
     for epoch in range(1):  
         model.train(True)
         running_loss = 0.0
@@ -466,20 +537,15 @@ def main(
         if logs:
             print(f"Train loss {epoch+1}: {running_loss/len(train_ds)},Train Acc:{running_acc*100/len(train_ds)}%")
 
-    if logs:
+    if model_eval_logs:
         print("Performance of Standard Forget Model on Forget Class")
-    history = [evaluate(model, forget_valid_dl)]
-    if logs:
+        history = [evaluate(model, forget_valid_dl)]
         print("Accuracy: {}".format(history[0]["Acc"]*100))
-    if logs:
         print("Loss: {}".format(history[0]["Loss"]))
 
-    if logs:
         print("Performance of Standard Forget Model on Retain Class")
-    history = [evaluate(model, retain_valid_dl)]
-    if logs:
+        history = [evaluate(model, retain_valid_dl)]
         print("Accuracy: {}".format(history[0]["Acc"]*100))
-    if logs:
         print("Loss: {}".format(history[0]["Loss"]))
 
-    return model, history
+    return model
