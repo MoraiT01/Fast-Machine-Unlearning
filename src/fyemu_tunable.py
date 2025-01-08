@@ -238,7 +238,6 @@ class FeatureMU_Loader(Dataset):
             if self.transform is not None:
                 # If a transform is specified, apply it to the image
                 img = self.transform(img)
-            label = torch.tensor(label)
             return img, label
         else:
             # If the index is after the retained dataset, generate a noise sample using the noise generator and return it
