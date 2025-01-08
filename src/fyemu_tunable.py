@@ -136,17 +136,18 @@ class NoiseGenerator(nn.Module):
         super().__init__()
         self.dim = dim_out
         self.start_dims = dim_start  # Initial dimension of random noise
-
+        # self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu"
         # Define fully connected layers
         self.layers = {}
-        self.layers["l1"] = nn.Linear(self.start_dims, dim_hidden[0])
+        self.layers["l1"] = nn.Linear(self.start_dims, dim_hidden[0]).to(self.device)
         last = dim_hidden[0]
         for idx in range(len(dim_hidden)-1):
-            self.layers[f"l{idx+2}"] = nn.Linear(dim_hidden[idx], dim_hidden[idx+1])
+            self.layers[f"l{idx+2}"] = nn.Linear(dim_hidden[idx], dim_hidden[idx+1]).to(self.device)
             last = dim_hidden[idx+1]
 
         # Define output layer
-        self.f_out = nn.Linear(last, math.prod(self.dim))        
+        self.f_out = nn.Linear(last, math.prod(self.dim)).to(self.device)    
 
     def forward(self):
         """
@@ -156,7 +157,7 @@ class NoiseGenerator(nn.Module):
         torch.Tensor: The reshaped tensor with specified output dimensions.
         """
         # Generate random starting noise
-        x = torch.randn(self.start_dims)
+        x = torch.randn(self.start_dims).to(self.device)
         x = x.flatten()
 
         # Transform noise into learnable patterns
@@ -175,6 +176,7 @@ class SubData(Dataset):
     def __init__(self, data, transform):
         self.data = data
         self.transform = transform
+        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
     def __len__(self):
         return len(self.data)
     def __getitem__(self, idx):
@@ -210,6 +212,8 @@ class FeatureMU_Loader(Dataset):
         self.retain_data = retain_data
         self.transform = transform
 
+        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
     def __len__(self) -> int:
         """
         Returns the length of the dataset.
@@ -238,7 +242,7 @@ class FeatureMU_Loader(Dataset):
             if self.transform is not None:
                 # If a transform is specified, apply it to the image
                 img = self.transform(img)
-            return img, label
+            return img.to(self.device), label.to(self.device)
         else:
             # If the index is after the retained dataset, generate a noise sample using the noise generator and return it
             c = len(self.retain_data)
@@ -249,7 +253,7 @@ class FeatureMU_Loader(Dataset):
                     # If the index is in the range, generate a noise sample and return it
                     random_max = i["gen"].dim[0]  # That is the batch size
                     x = random.randint(0, random_max-1)  # Generate a random number between 0 and the batch size
-                    return i["gen"]()[x], i["label"]
+                    return i["gen"]()[x].to(self.device), i["label"].to(self.device)
 
 def main(
     t_Epochs: int,
@@ -383,7 +387,7 @@ def main(
         classwise_train[i] = []
 
     for img_path, label in train_ds.imgs:
-        classwise_train[label].append((img_path, torch.tensor(label)))
+        classwise_train[label].append((img_path, torch.tensor(label).to(DEVICE)))
     
     # classwise_test = {}
     # for i in range(num_classes):
@@ -433,7 +437,7 @@ def main(
             dim_out = [batch_size, 3, 32, 32],
             dim_hidden=t_Layers,
             dim_start=t_Noise_Dim,
-            )
+            ).to("cpu")
         opt = torch.optim.Adam(noises[cls].parameters(), lr = t_Learning_Rate)
 
         num_epochs = t_Epochs # Changed
@@ -442,9 +446,9 @@ def main(
         for epoch in range(num_epochs):
             total_loss = []
             for batch in range(num_steps):
-                inputs = noises[cls]()
-                labels = torch.zeros(batch_size)+class_label
-                outputs = model(inputs)
+                inputs = noises[cls]().to(DEVICE)
+                labels = torch.zeros(batch_size).cuda()+class_label
+                outputs = model(inputs).to(DEVICE)
                 loss = -F.cross_entropy(outputs, labels.long()) + t_Regularization_term*torch.mean(torch.sum(torch.square(inputs), [1, 2, 3])) # Changed
                 opt.zero_grad()
                 loss.backward()
@@ -479,7 +483,7 @@ def main(
         running_acc = 0
         for i, data in enumerate(noisy_loader):
             inputs, labels = data
-            inputs, labels = inputs,labels.clone().detach()
+            inputs, labels = inputs.to(DEVICE), labels.clone().detach().to(DEVICE)
 
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -521,7 +525,7 @@ def main(
         running_acc = 0
         for i, data in enumerate(heal_loader):
             inputs, labels = data
-            inputs, labels = inputs, labels.clone().detach()
+            inputs, labels = inputs.to(DEVICE), labels.clone().detach().to(DEVICE)
 
             optimizer.zero_grad()
             outputs = model(inputs)
