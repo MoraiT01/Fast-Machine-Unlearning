@@ -1,4 +1,4 @@
-data/
+data/cifar10
 cifar10.tgz
 ResNET18_CIFAR10_ALL_CLASSES.pt
 ResNET18_CIFAR10_RETAIN_CLASSES.pt

@@ -19,8 +19,8 @@ import torchvision.transforms as tt
 from torchvision.models import resnet18
 
 # Set the seed for reproducible results
-random.seed(100)
-torch.manual_seed(100)
+# random.seed(100)
+# torch.manual_seed(100)
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 def accuracy(outputs, labels):
