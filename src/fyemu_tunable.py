@@ -136,8 +136,8 @@ class NoiseGenerator(nn.Module):
         super().__init__()
         self.dim = dim_out
         self.start_dims = dim_start  # Initial dimension of random noise
-        # self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
+        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        # self.device = "cpu"
         # Define fully connected layers
         self.layers = {}
         self.layers["l1"] = nn.Linear(self.start_dims, dim_hidden[0]).to(self.device)
@@ -171,6 +171,22 @@ class NoiseGenerator(nn.Module):
         # Reshape tensor to the specified dimensions
         reshaped_tensor = x.view(self.dim)
         return reshaped_tensor
+
+class NoiseDataset(Dataset):
+
+    def __init__(self, noise_generator: NoiseGenerator, noise_labels: torch.Tensor, number_of_noise: int = 100,):
+
+        self.noise_generator = noise_generator
+        self.noise_labels  = noise_labels
+        self.number_of_noise = number_of_noise if isinstance(self.noise_labels, torch.Tensor) else len(self.noise_labels)
+        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    def __len__(self) -> int:
+        return self.number_of_noise
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+
+        return self.noise_generator().to(self.device), self.noise_labels.to(self.device)
 
 class SubData(Dataset):
     def __init__(self, data, transform):
@@ -251,9 +267,7 @@ class FeatureMU_Loader(Dataset):
                 c += i["n"]
                 if idx < c:
                     # If the index is in the range, generate a noise sample and return it
-                    random_max = i["gen"].dim[0]  # That is the batch size
-                    x = random.randint(0, random_max-1)  # Generate a random number between 0 and the batch size
-                    return i["gen"]()[x].to(self.device), i["label"].to(self.device)
+                    return i["gen"]().to(self.device), i["label"].to(self.device)
 
 def main(
     t_Epochs: int,
@@ -298,6 +312,8 @@ def main(
         tt.ToTensor(),
         tt.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
+
+    torch.cuda.empty_cache()
 
     train_ds = ImageFolder(data_dir+f'{os.sep}train', transform_train)
     valid_ds = ImageFolder(data_dir+f'{os.sep}test', transform_test)
@@ -434,10 +450,10 @@ def main(
             print("Optiming loss for class {}".format(cls))
         # Here is the place of change
         noises[cls] = NoiseGenerator(
-            dim_out = [batch_size, 3, 32, 32],
+            dim_out = [3, 32, 32],
             dim_hidden=t_Layers,
             dim_start=t_Noise_Dim,
-            ).to("cpu")
+            ).to(DEVICE)
         opt = torch.optim.Adam(noises[cls].parameters(), lr = t_Learning_Rate)
 
         num_epochs = t_Epochs # Changed
@@ -446,7 +462,10 @@ def main(
         for epoch in range(num_epochs):
             total_loss = []
             for batch in range(num_steps):
-                inputs = noises[cls]().to(DEVICE)
+                inputs = noises[cls]().to(DEVICE).unsqueeze(0)
+                for i in range(batch_size-1):
+                    new = noises[cls]().to(DEVICE).unsqueeze(0)
+                    inputs = torch.cat((inputs, new), 0)
                 labels = torch.zeros(batch_size).cuda()+class_label
                 outputs = model(inputs).to(DEVICE)
                 loss = -F.cross_entropy(outputs, labels.long()) + t_Regularization_term*torch.mean(torch.sum(torch.square(inputs), [1, 2, 3])) # Changed

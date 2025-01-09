@@ -175,7 +175,7 @@ def kl_divergence_between_models(model1: torch.nn.Module, model2: torch.nn.Modul
             # Calculate the KL divergence for each sample and sum up
             kl_divergence = F.kl_div(probs1.log(), probs2, reduction='batchmean').item()
 
-            kl_divergence = round(kl_divergence, 4) # I had problems with very small numbers accumulating to scuw the result
+            # kl_divergence = round(kl_divergence, 4) # I had problems with very small numbers accumulating to scuw the result
             
             # Update cumulative average
             kl_divergence_ca = kl_divergence_ca + (kl_divergence - kl_divergence_ca)/n
