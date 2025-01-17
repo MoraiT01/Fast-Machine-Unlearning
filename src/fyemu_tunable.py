@@ -278,9 +278,10 @@ def main(
     t_Regularization_term: float = 0.2,
     t_Layers: list = [525, 400, 350, 250],
     t_Noise_Dim: int = 325,
-    new_baseline: bool = False,
+    new_baseline: bool = True,
     logs: bool = False,
     model_eval_logs: bool = True,
+    idx: int = -1,
     ):
 
     # Checking if the dataset needs to be downloaded
@@ -328,7 +329,10 @@ def main(
     # classes which are required to un-learn
     classes_to_forget = [0, 2]
 
-    if new_baseline or not os.path.exists("ResNET18_CIFAR10_ALL_CLASSES.pt"):
+    if not os.path.exists("data/all/models"):
+        os.makedirs("data/all/models")
+    n = len(os.listdir("data/all/models"))
+    if new_baseline:
         print("---Training new ResNet18---")
         model = resnet18(num_classes = 10).to(DEVICE)
         epochs = 40
@@ -354,10 +358,11 @@ def main(
                                     grad_clip=grad_clip, 
                                     weight_decay=weight_decay, 
                                     opt_func=opt_func)
+        
+        torch.save(model.state_dict(), f"data/all/models/ResNET18_CIFAR10_ALL_CLASSES_{n}.pt")
 
-        torch.save(model.state_dict(), "ResNET18_CIFAR10_ALL_CLASSES.pt")
     # same for the exact unlearned model
-    if new_baseline or not os.path.exists("ResNET18_CIFAR10_RETAIN_CLASSES.pt"):
+    if new_baseline:
         print("---Training new Exact Unlearned ResNet18---")
         model = resnet18(num_classes = 10).to(DEVICE)
         epochs = 40
@@ -387,9 +392,18 @@ def main(
                                     weight_decay=weight_decay, 
                                     opt_func=opt_func)
 
-        torch.save(model.state_dict(), "ResNET18_CIFAR10_RETAIN_CLASSES.pt")
+        if not os.path.exists("data/retrain/models"):
+            os.makedirs("data/retrain/models")
+        torch.save(model.state_dict(), f"data/retrain/models/ResNET18_CIFAR10_RETRAIN_CLASSES_{n}.pt")
+    if n == 0:
+        raise Exception("No model found")
+    if not new_baseline:
+        if idx == -1:
+            n = random.randint(0, len(os.listdir("data/all/models"))-1)
+        else:
+            n = idx
     model = resnet18(num_classes = 10).to(DEVICE)
-    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
+    model.load_state_dict(torch.load(f"data/all/models/ResNET18_CIFAR10_ALL_CLASSES_{n}.pt", weights_only=True))
 
     if model_eval_logs:
         history = [evaluate(model, valid_dl)]
@@ -404,13 +418,6 @@ def main(
 
     for img_path, label in train_ds.imgs:
         classwise_train[label].append((img_path, torch.tensor(label).to(DEVICE)))
-    
-    # classwise_test = {}
-    # for i in range(num_classes):
-    #     classwise_test[i] = []
-
-    # for img_path, label in valid_ds.imgs:
-    #     classwise_test[label].append((img_path, label))
 
     # getting some samples from retain classes
     num_samples_per_class = 1000 # This one could also be finetuned
