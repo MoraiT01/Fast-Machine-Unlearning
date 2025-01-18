@@ -403,7 +403,7 @@ def main(
         else:
             n = idx
     model = resnet18(num_classes = 10).to(DEVICE)
-    model.load_state_dict(torch.load(f"data/all/models/ResNET18_CIFAR10_ALL_CLASSES_{n}.pt", weights_only=True))
+    model.load_state_dict(torch.load(f"data/all/models/ResNET18_CIFAR10_ALL_CLASSES_{n}.pt", map_location=DEVICE, weights_only=True))
 
     if model_eval_logs:
         history = [evaluate(model, valid_dl)]
@@ -447,7 +447,7 @@ def main(
 
     # loading the model
     model = resnet18(num_classes = 10).to(DEVICE)
-    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", weights_only=True))
+    model.load_state_dict(torch.load("ResNET18_CIFAR10_ALL_CLASSES.pt", map_location=DEVICE, weights_only=True))
 
     if logs:
         print("---Optimizing noise generator---")
@@ -473,7 +473,7 @@ def main(
                 for i in range(batch_size-1):
                     new = noises[cls]().to(DEVICE).unsqueeze(0)
                     inputs = torch.cat((inputs, new), 0)
-                labels = torch.zeros(batch_size).cuda()+class_label
+                labels = torch.zeros(batch_size).to(DEVICE)+class_label
                 outputs = model(inputs).to(DEVICE)
                 loss = -F.cross_entropy(outputs, labels.long()) + t_Regularization_term*torch.mean(torch.sum(torch.square(inputs), [1, 2, 3])) # Changed
                 opt.zero_grad()

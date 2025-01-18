@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from typing import Literal, Dict
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -182,3 +183,15 @@ def kl_divergence_between_models(model1: torch.nn.Module, model2: torch.nn.Modul
     
     # Return average KL divergence over all samples
     return kl_divergence_ca
+
+def calc_mutlimodel_metric_average(modeltype1: Dict[str, torch.nn.Module], modeltype2: Dict[str, torch.nn.Module], testing_loader: DataLoader = None,) -> float:
+    
+    result = 0.0
+    counter = 0
+    if len(modeltype1.keys()) != len(modeltype2.keys()):
+        raise ValueError("modeltype1 and modeltype2 must have the same keys and same length")
+    for idx in modeltype1.keys():
+        result += kl_divergence_between_models(modeltype1[idx], modeltype2[idx], testing_loader,)
+        counter += 1
+
+    return result / counter
