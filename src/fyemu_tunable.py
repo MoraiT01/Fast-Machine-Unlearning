@@ -270,14 +270,14 @@ class FeatureMU_Loader(Dataset):
                     return i["gen"]().to(self.device), i["label"].to(self.device)
 
 def main(
-    t_Epochs: int = 5,
-    t_Steps: int = 16,
-    t_Learning_Rate: float = 0.22,
+    t_Epochs: int = 10,
+    t_Steps: int = 15,
+    t_Learning_Rate: float = 0.18,
     t_Batch_Size: int = 370,
     t_Number_of_Noise_Batches: int = 1,
-    t_Regularization_term: float = 0.18,
-    t_Layers: list = [1000, 1000],
-    t_Noise_Dim: int = 80,
+    t_Regularization_term: float = 0.15,
+    t_Layers: list = [1024, 1024, 1024, 1024, 1024, 1024],
+    t_Noise_Dim: int = 70,
     new_baseline: bool = True,
     logs: bool = False,
     model_eval_logs: bool = True,
